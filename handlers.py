@@ -1,7 +1,6 @@
-# handlers.py
-
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
+import os
 
 from data import restaurants
 from keyboards import cities_kb, back_kb, filter_kb, sponsor_kb
@@ -9,22 +8,32 @@ from keyboards import cities_kb, back_kb, filter_kb, sponsor_kb
 router = Router()
 
 CHANNEL_ID = "@HalalEssenDE"
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+# ===== USERS =====
+def save_user(user_id):
+    with open("users.csv", "a") as f:
+        f.write(str(user_id) + "\n")
 
 
-# ✅ FINAL FIX — works for member/admin/owner
+def get_users():
+    try:
+        with open("users.csv", "r") as f:
+            return list(set([int(line.strip()) for line in f]))
+    except:
+        return []
+
+
+# ===== SUB CHECK =====
 async def check_subscription(bot: Bot, user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
-
-        # accept everyone except left / kicked
         return member.status not in ("left", "kicked")
-
-    except Exception as e:
-        print("SUB CHECK ERROR:", e)
+    except:
         return False
 
 
-# 🔥 Format restaurant красиво
+# ===== FORMAT =====
 def format_restaurant(r):
     menu = "\n".join([f"  • {m['name']} — {m['price']}" for m in r["menu"]])
 
@@ -39,9 +48,11 @@ def format_restaurant(r):
     )
 
 
-# 🚀 START
+# ===== START =====
 @router.message(Command("start"))
 async def start(msg: types.Message, bot: Bot):
+    save_user(msg.from_user.id)
+
     is_sub = await check_subscription(bot, msg.from_user.id)
 
     if not is_sub:
@@ -54,7 +65,7 @@ async def start(msg: types.Message, bot: Bot):
     await msg.answer("🇩🇪 Wähle eine Stadt:", reply_markup=cities_kb())
 
 
-# 🔁 CHECK BUTTON
+# ===== CHECK BUTTON =====
 @router.callback_query(F.data == "check_sub")
 async def check_sub(callback: types.CallbackQuery, bot: Bot):
     is_sub = await check_subscription(bot, callback.from_user.id)
@@ -68,7 +79,7 @@ async def check_sub(callback: types.CallbackQuery, bot: Bot):
         await callback.answer("❌ Du bist noch nicht abonniert", show_alert=True)
 
 
-# 📍 CITY SELECT
+# ===== CITY =====
 @router.callback_query(F.data.startswith("city_"))
 async def show_city(callback: types.CallbackQuery):
     city = callback.data.split("_")[1]
@@ -86,7 +97,7 @@ async def show_city(callback: types.CallbackQuery):
     )
 
 
-# 🚚 FILTER DELIVERY
+# ===== FILTER =====
 @router.callback_query(F.data.startswith("filter_"))
 async def filter_delivery(callback: types.CallbackQuery):
     city = callback.data.split("_")[1]
@@ -108,7 +119,7 @@ async def filter_delivery(callback: types.CallbackQuery):
     )
 
 
-# 🔙 BACK
+# ===== BACK =====
 @router.callback_query(F.data == "back")
 async def back(callback: types.CallbackQuery):
     await callback.message.answer(
@@ -117,9 +128,57 @@ async def back(callback: types.CallbackQuery):
     )
 
 
-# 🔍 SEARCH (TEXT INPUT)
-@router.message()
-async def search(msg: types.Message):
+# ===== ADMIN =====
+@router.message(Command("admin"))
+async def admin_panel(msg: types.Message):
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    await msg.answer("👨‍💼 Admin Panel:\n\n/stats\n/broadcast")
+
+
+# ===== STATS =====
+@router.message(Command("stats"))
+async def stats(msg: types.Message):
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    users = get_users()
+    await msg.answer(f"📊 Users: {len(users)}")
+
+
+# ===== BROADCAST =====
+waiting_broadcast = set()
+
+
+@router.message(Command("broadcast"))
+async def broadcast_start(msg: types.Message):
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    waiting_broadcast.add(msg.from_user.id)
+    await msg.answer("✍️ Nachricht eingeben:")
+
+
+@router.message(F.text)
+async def handle_text(msg: types.Message, bot: Bot):
+    # 👉 broadcast режим
+    if msg.from_user.id in waiting_broadcast:
+        users = get_users()
+        success = 0
+
+        for user_id in users:
+            try:
+                await bot.send_message(user_id, msg.text)
+                success += 1
+            except:
+                pass
+
+        await msg.answer(f"✅ Gesendet: {success}")
+        waiting_broadcast.remove(msg.from_user.id)
+        return
+
+    # 👉 search
     query = msg.text.lower()
     results = []
 
